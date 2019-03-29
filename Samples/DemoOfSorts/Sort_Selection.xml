@@ -1,0 +1,248 @@
+<?xml-stylesheet href="xsltforms/xsltforms.xsl" type="text/xsl"?>
+<!-- 
+    Author: John M. Boyer
+    
+    To run, 
+    1) Download XSLT Forms from https://sourceforge.net/projects/xsltforms/
+    2) Extract the zip file to an HTTP or local directory
+    3) Place this file in the same directory
+    4) Click the file in any browser, or drag and drop onto Firefox browser
+    
+    For longer performance tests, it helps to extend how long scripts can run
+    in your browser. For example, in Firefox's about:config, increase the 
+    dom.max_script_run_time setting.
+-->
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:ev="http://www.w3.org/2001/xml-events">
+<head>
+    <title>Selection Sort in XForms</title>
+    
+    <model xmlns="http://www.w3.org/2002/xforms" id="M">
+
+        <!-- Starter data -->
+        <instance id="ORIGDATA" src="./Sort_Data_10.xml"/>
+
+        <!-- Data used by UI. Loaded by actions below. -->
+        <instance id="DATA">
+            <data xmlns="">
+                <items>
+                </items>
+            </data>
+        </instance>
+        
+        <!-- Copies the original data to the main user data instance as the form starts up -->
+        <action ev:event="xforms-model-construct-done">
+            <delete nodeset="instance('DATA')/items/item"/>
+            <insert context="instance('DATA')/items" 
+                    origin="instance('ORIGDATA')/items/item"/>
+        </action>
+
+        <!-- Variables used by the UI and the change data size action -->
+        <instance id="VARS">
+            <vars xmlns="">
+                <n>10</n>
+                <size>10</size>
+                <random/>
+                <items/>		
+                <pos/>
+                <window>
+                    <start>1</start>
+                    <size>20</size>
+                    <end>20</end>
+                </window>		
+                <time>
+                    <start>0</start>
+                    <stop>0</stop>
+                    <diff/>
+                </time>
+            </vars>
+        </instance>
+        
+        <!-- The end of the data view window is calculated based on start and size -->
+        <bind nodeset="instance('VARS')/window/end" 
+              calculate="instance('VARS')/window/start + instance('VARS')/window/size - 1"/>
+        
+        <!-- When sorts are triggered, they measure start and stop times for the sorts,
+             and this calculates the difference -->
+        <bind nodeset="instance('VARS')/time/diff" calculate="../stop - ../start"/>
+        
+        <!-- This is invoked on startup and by the UI when the user enters a new number of data items -->
+        <action ev:event="change-data-size">
+        	
+        	  <!-- Choose a size in a way that corrects input errors (NaN, non-integer, less than 10) -->
+        	  <setvalue ref="instance('VARS')/size" 
+        	  	        value="choose(string(number(../n))!='NaN' and ../n > 10, round(../n), 10)"/>
+          
+            <!-- Get the random number generator ready -->
+            <setvalue ref="instance('VARS')/random" value="random(true)"/>
+            
+            <!-- Empty the data item list -->
+            <delete nodeset="instance('DATA')/items/item"/>
+            
+            <!-- Fill the data item list to at least the desired size -->
+            <action while="count(instance('DATA')/items/item) &lt; instance('VARS')/size">
+            	  <!-- Reset the item buffer with a fresh copy of the original data -->
+                <delete nodeset="instance('VARS')/items/item"/>
+                <insert context="instance('VARS')/items" origin="instance('ORIGDATA')/items/item"/>
+                
+                <!-- Concatenate a random number to the keys of the items in the buffer. 
+                     The range of the random numbers is 100 times the requested size
+                     to reduce birthday paradox collisions in the keys. -->
+                <setvalue ref="instance('VARS')/random" value="1+floor(random(false)*100*../size)"/>
+                <action iterate="instance('VARS')/items/item">
+                    <setvalue ref="num" value="concat(., instance('VARS')/random)"/>
+                    <setvalue ref="name" value="concat(., '-', instance('VARS')/random)"/>
+                </action>
+                
+                <!-- Prepend the item buffer content to the data item list -->
+                <insert context="instance('DATA')/items" origin="instance('VARS')/items/item"/>
+            </action>
+            
+            <!-- Remove any extra items created by expanding in blocks of 10 -->
+            <delete if="instance('VARS')/size &lt; count(instance('DATA')/items/item)" 
+            	        nodeset="instance('DATA')/items/item[position() &lt;= (count(instance('DATA')/items/item) - instance('VARS')/size)]"/>
+        </action>
+        
+        <!-- Variables used by the selection sort actions -->
+        <instance id="SVARS">
+            <svars xmlns="">
+                <items/>
+                <least/>
+            </svars>    
+        </instance>
+        
+        <!-- Selection sort based on the 'num' subelement -->
+        <action ev:event="sel-sort-num">
+        	
+            <!-- Move the unsorted data item elements to a temp instance element for sorting -->
+            <insert context="instance('SVARS')/items" 
+                    origin="instance('DATA')/items/item"/>
+            <delete nodeset="instance('DATA')/items/item"/>
+            
+            <!-- Loop while there are still unsorted items from which to select a minimal element. -->
+            <action while="instance('SVARS')/items/item">
+            	
+                <!-- Start by assuming that the first item has the smallest key -->
+                <setvalue ref="instance('SVARS')/least"
+                	          value="../items/item[1]/num"/>
+              
+                <!-- Iterate through the items to find the smallest key -->
+                <action iterate="instance('SVARS')/items/item">
+                	    <setvalue if="./num &lt; ../../least"
+                	              ref="../../least"
+                	              value="context()/num"/>
+                </action>
+                
+                <!-- Move the minimal item(s) from the unsorted list to the end of the sorted list -->
+                <insert context="instance('DATA')/items" 
+                        nodeset="item" at="last()" position="after" 
+                	        origin="instance('SVARS')/items/item[num=instance('SVARS')/least]"/>
+                <delete nodeset="instance('SVARS')/items/item[num=instance('SVARS')/least]"/>
+            </action>
+        </action>
+
+        <!-- Selection sort based on string comparing the 'name' subelement -->
+        <action ev:event="sel-sort-name">
+            
+            <!-- Move the unsorted data item elements to a temp instance element for sorting -->
+            <insert context="instance('SVARS')/items" 
+                    origin="instance('DATA')/items/item"/>
+            <delete nodeset="instance('DATA')/items/item"/>
+            
+            <!-- Loop while there are still unsorted items from which to select a minimal element. -->
+            <action while="instance('SVARS')/items/item">
+            	
+                <!-- Start by assuming that the first item has the smallest key -->
+                <setvalue ref="instance('SVARS')/least"
+                	          value="../items/item[1]/name"/>
+                	          
+                <!-- Iterate through the items to find the smallest key -->
+                <action iterate="instance('SVARS')/items/item">
+                	    <setvalue if="compare(./name, ../../least) &lt; 0"
+                	              ref="../../least"
+                	              value="context()/name"/>
+                </action>
+                
+                <!-- Move the minimal item(s) from the unsorted list to the end of the sorted list -->
+                <insert context="instance('DATA')/items" 
+                        nodeset="item" at="last()" position="after" 
+                	        origin="instance('SVARS')/items/item[name=instance('SVARS')/least]"/>
+                <delete nodeset="instance('SVARS')/items/item[name=instance('SVARS')/least]"/>
+            </action>
+        </action>
+        
+    </model>
+</head>
+
+<body>
+
+	<h2>Selection Sort in XForms</h2>
+	  	
+    <group xmlns="http://www.w3.org/2002/xforms">
+    	
+        <input ref="instance('VARS')/n">
+        	  <label>Enter data size: </label>
+            <action ev:event="xforms-value-changed">
+                <dispatch name="change-data-size" targetid="M"/>
+                <setvalue ref="instance('VARS')/window/start">1</setvalue>
+            </action>
+        </input>
+
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+
+        <output value="count(instance('DATA')/items/item)">
+            <label>Data Size: </label>
+        </output>
+    	  
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+        
+        <repeat nodeset="instance('DATA')/items/item[position() >= instance('VARS')/window/start and
+                                                     position() &lt;= instance('VARS')/window/end]">
+            <input ref="num"><label/></input>
+            <input ref="name"><label/></input>
+            <input ref="phone"><label/></input>
+        </repeat>
+        
+        <trigger>
+            <label>Previous</label>
+            <setvalue ev:event="DOMActivate" 
+                      ref="instance('VARS')/window/start"  value="if(. > 1, . - ../size, .)"/>
+        </trigger>
+        <trigger>
+            <label>Next</label>
+            <setvalue ev:event="DOMActivate" 
+                      ref="instance('VARS')/window/start" value="if(. + ../size &lt; ../../n, . + ../size, .)"/>
+        </trigger>
+        
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+                
+        <trigger>
+            <label>Selection Sort by Number</label>
+            <action ev:event="DOMActivate">
+                <setvalue ref="instance('VARS')/time/start" value="seconds-from-dateTime(now())"/>
+                <dispatch name="sel-sort-num" targetid="M"/>
+                <setvalue ref="instance('VARS')/time/stop" value="seconds-from-dateTime(now())"/>
+            </action>
+        </trigger>
+        
+        <trigger>
+            <label>Selection Sort by Name</label>
+            
+            <action ev:event="DOMActivate">
+                <setvalue ref="instance('VARS')/time/start" value="seconds-from-dateTime(now())"/>
+                <dispatch name="sel-sort-name" targetid="M"/>
+                <setvalue ref="instance('VARS')/time/stop" value="seconds-from-dateTime(now())"/>
+            </action>
+        </trigger>
+        
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+        
+        <output ref="instance('VARS')/time/diff">
+            <label>Seconds to Sort: </label>
+        </output>
+        
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+        
+    </group>
+</body>
+</html>

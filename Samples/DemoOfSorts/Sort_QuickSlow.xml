@@ -1,0 +1,386 @@
+<?xml-stylesheet href="xsltforms/xsltforms.xsl" type="text/xsl"?>
+<!-- 
+    Author: John M. Boyer
+    
+    To run, 
+    1) Download XSLT Forms from https://sourceforge.net/projects/xsltforms/
+    2) Extract the zip file to an HTTP or local directory
+    3) Place this file in the same directory
+    4) Click the file in any browser, or drag and drop onto Firefox browser
+    
+    For longer performance tests, it helps to extend how long scripts can run
+    in your browser. For example, in Firefox's about:config, increase the 
+    dom.max_script_run_time setting.
+-->
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:ev="http://www.w3.org/2001/xml-events">
+<head>
+    <title>An Imperative Quicksort in XForms</title>
+    
+    <model xmlns="http://www.w3.org/2002/xforms" id="M">
+
+        <!-- Starter data -->
+        <instance id="ORIGDATA" src="./Sort_Data_10.xml"/>
+
+        <!-- Data used by UI. Loaded by actions below. -->
+        <instance id="DATA">
+            <data xmlns="">
+                <items>
+                </items>
+            </data>
+        </instance>
+        
+        <!-- Copies the original data to the main user data instance as the form starts up -->
+        <action ev:event="xforms-model-construct-done">
+            <delete nodeset="instance('DATA')/items/item"/>
+            <insert context="instance('DATA')/items" 
+                    origin="instance('ORIGDATA')/items/item"/>
+        </action>
+
+        <!-- Variables used by the UI and other actions -->
+        <instance id="VARS">
+            <vars xmlns="">
+                <n>10</n>
+                <size>10</size>
+                <random/>
+                <items/>
+                <pos/>
+                <window>
+                    <start>1</start>
+                    <size>20</size>
+                    <end>20</end>
+                </window>		
+                <time>
+                    <start>0</start>
+                    <stop>0</stop>
+                    <diff/>
+                </time>
+            </vars>
+        </instance>
+        
+        <!-- The end of the data view window is calculated based on start and size -->
+        <bind nodeset="instance('VARS')/window/end" 
+              calculate="instance('VARS')/window/start + instance('VARS')/window/size - 1"/>
+        
+        <!-- When sorts are triggered, they measure start and stop times for the sorts,
+             and this calculates the difference -->
+        <bind nodeset="instance('VARS')/time/diff" calculate="../stop - ../start"/>
+        
+        <!-- This is invoked on startup and by the UI when the user enters a new number of data items -->
+        <action ev:event="change-data-size">
+        	
+        	  <!-- Choose a size in a way that corrects input errors (NaN, non-integer, less than 10) -->
+        	  <setvalue ref="instance('VARS')/size" 
+        	  	        value="choose(string(number(../n))!='NaN' and ../n > 10, round(../n), 10)"/>
+          
+            <!-- Get the random number generator ready -->
+            <setvalue ref="instance('VARS')/random" value="random(true)"/>
+            
+            <!-- Empty the data item list -->
+            <delete nodeset="instance('DATA')/items/item"/>
+            
+            <!-- Fill the data item list to at least the desired size -->
+            <action while="count(instance('DATA')/items/item) &lt; instance('VARS')/size">
+            	  <!-- Reset the item buffer with a fresh copy of the original data -->
+                <delete nodeset="instance('VARS')/items/item"/>
+                <insert context="instance('VARS')/items" origin="instance('ORIGDATA')/items/item"/>
+                
+                <!-- Concatenate a random number to the keys of the items in the buffer. 
+                     The range of the random numbers is 100 times the requested size
+                     to reduce birthday paradox collisions in the keys. -->
+                <setvalue ref="instance('VARS')/random" value="1+floor(random(false)*100*../size)"/>
+                <action iterate="instance('VARS')/items/item">
+                    <setvalue ref="num" value="concat(., instance('VARS')/random)"/>
+                    <setvalue ref="name" value="concat(., '-', instance('VARS')/random)"/>
+                </action>
+                
+                <!-- Prepend the item buffer content to the data item list -->
+                <insert context="instance('DATA')/items" origin="instance('VARS')/items/item"/>
+            </action>
+            
+            <!-- Remove any extra items created by expanding in blocks of 10 -->
+            <delete if="instance('VARS')/size &lt; count(instance('DATA')/items/item)" 
+            	      nodeset="instance('DATA')/items/item[position() &lt;= (count(instance('DATA')/items/item) - instance('VARS')/size)]"/>
+        </action>
+        
+        <!-- Prepares data for showing stability of the sort by adding positions to all data items and by
+             changing the name keys to remove the appended random numbers -->
+        <action ev:event="prep-stability-demo">
+            <action iterate="instance('DATA')/items/item">
+                <insert context="." origin="instance('VARS')/pos"/>
+                <setvalue ref="pos" value="count(../preceding::item)"/>
+                <setvalue ref="name" 
+                          value="instance('ORIGDATA')/items/item[position()=(context()/pos mod 10 + 1)]/name"/>
+            </action>
+        </action>
+        
+        <!-- Variables used by the quick sort actions -->
+        <instance id="QVARS">
+            <qvars xmlns="">
+                <stack/>
+                <part/>
+                <pivot/>
+                <key/>
+                <count/>
+                <i/>
+                <index/>               
+                <psize/>
+            </qvars>
+        </instance>
+
+        <!-- Partition sort based on 'num' subelement of item. 
+        
+             Only O(n) commands are executed, but from the information theoretic lower bound 
+             on sorting we know that sorting takes at least Omega(n log n), so the declarative 
+             aspects of the commands are doing at least Omega(log n) work. 
+        
+             Note, however, that the actual performance profile is O(n^2 log n). XPath engines
+             lose efficiency on dynamic XML trees because the node order index becomes stale when 
+             the XML tree is changed. This causes node order queries to degrade from constant time
+             to linear time cost per query.  
+        -->
+        <action ev:event="quick-sort-num">
+
+            <!-- Initialize the random number generator to help with picking pivot items -->
+            <setvalue ref="instance('QVARS')/pivot" value="random(true)"/>
+              
+            <!-- Push an initially empty partition onto the recursion stack, ... -->
+            <insert context="instance('QVARS')/stack" origin="../part"/>
+              
+            <!-- Copy all data items into the partition element for sorting -->                
+            <insert context="instance('QVARS')/stack/part" 
+            	        origin="instance('DATA')/items/item"/>
+              
+            <!-- Clear all data items from the source instance -->
+            <delete nodeset="instance('DATA')/items/item"/>
+              
+            <!-- Continue sorting while there are still partitions left to sort -->
+            <action while="instance('QVARS')/stack/part">
+            
+                <!-- Randomly pick a pivot element position (to avoid poor performance on sorted lists) -->
+                <setvalue ref="instance('QVARS')/pivot" 
+                          value="1+floor(random(false)*count(../stack/part[1]/item))"/>
+                      
+                <!-- Get the key of the pivot item -->
+                <setvalue ref="instance('QVARS')/key" 
+                          value="../stack/part[1]/item[number(../../../pivot)]/num"/>
+                      
+                <!-- Count how many elements are less than the pivot item key -->
+                <setvalue ref="instance('QVARS')/count" 
+                          value="count(../stack/part[1]/item[num &lt; ../../../key])"/>
+                
+                <!-- If there are items that are less than the pivot key, then partition the partition -->
+                <action if="instance('QVARS')/count > 0">
+                      	
+                    <!-- Push a new empty partition onto the stack -->
+                    <insert context="instance('QVARS')/stack" origin="../part"/>
+                        
+                    <!-- Copy the lesser elements into the new first partition -->
+                    <setvalue ref="instance('QVARS')/i">1</setvalue>
+                    <setvalue ref="instance('QVARS')/index">1</setvalue>
+                    <setvalue ref="instance('QVARS')/psize" value="count(../stack/part[2]/item)"/>                    
+                    
+                    <action while="instance('QVARS')/i &lt;= instance('QVARS')/psize">
+                    
+                        <action if="instance('QVARS')/stack/part[2]/item[number(instance('QVARS')/index)]/num &lt; instance('QVARS')/key">
+                            <insert context="instance('QVARS')/stack/part[1]"
+                                    nodeset="item" at="last()" position="after"
+                                    origin="instance('QVARS')/stack/part[2]/item[number(instance('QVARS')/index)]"/>
+                            <delete nodeset="instance('QVARS')/stack/part[2]/item[number(instance('QVARS')/index)]"/>
+                            <setvalue ref="instance('QVARS')/index" value=". - 1"/>
+                        </action>
+                       
+                        <setvalue ref="instance('QVARS')/index" value=". + 1"/>
+                        <setvalue ref="instance('QVARS')/i" value=". + 1"/>
+                    </action>
+                    
+                    <!--
+                    <insert context="instance('QVARS')/stack/part[1]"
+                            origin="../part[2]/item[num &lt; ../../../key]"/>
+                    <delete nodeset="instance('QVARS')/stack/part[2]/item[num &lt; ../../../key]"/>
+                    -->      
+                </action>
+                      
+                <!-- Otherwise, the pivot item has the least key, so move all items matching the pivot key
+                     to the end of the sorted list. If this empties the partition, then delete it. -->
+                <action if="instance('QVARS')/count = 0">
+                
+                	    <!-- Append the item(s) with the pivot key to the sorted list of items -->
+                    <insert context="instance('DATA')/items" 
+                            nodeset="item" at="last()" position="after"
+                            origin="instance('QVARS')/stack/part[1]/item[num=../../../key]"/>
+                      	      
+                    <!-- Then delete the item(s) that match the pivot key -->
+                    <delete nodeset="instance('QVARS')/stack/part[1]/item[num=../../../key]"/>
+                    
+                    <!-- If the partition is now empty, then delete it (recursive termination) -->
+                    <delete if="count(instance('QVARS')/stack/part[1]/item) = 0" 
+                            nodeset="instance('QVARS')/stack/part[1]"/>
+                               
+                </action>
+            </action>
+        </action>
+
+        <!-- Partition sort based on 'name' subelement of item. 
+             Uses compare() to ensure lexicographic key comparison. -->
+        <action ev:event="quick-sort-name">
+
+            <!-- Initialize the random number generator to help with picking pivot items -->
+            <setvalue ref="instance('QVARS')/pivot" value="random(true)"/>
+              
+            <!-- Push an initially empty partition onto the recursion stack, ... -->
+            <insert context="instance('QVARS')/stack" origin="../part"/>
+              
+            <!-- Copy all origin data items into the partition element for sorting -->                
+            <insert context="instance('QVARS')/stack/part" 
+            	        origin="instance('DATA')/items/item"/>
+              
+            <!-- Clear all origin data items from the source instance -->
+            <delete nodeset="instance('DATA')/items/item"/>
+              
+            <!-- Continue sorting while there are still partitions left to sort -->
+            <action while="instance('QVARS')/stack/part">
+              
+                <!-- Randomly pick a pivot element position (to avoid poor performance on sorted lists) -->
+                <setvalue ref="instance('QVARS')/pivot" 
+                          value="1+floor(random(false)*count(../stack/part[1]/item))"/>
+                      
+                <!-- Get the key of the pivot item -->
+                <setvalue ref="instance('QVARS')/key" 
+                          value="../stack/part[1]/item[number(../../../pivot)]/name"/>
+                      
+                <!-- Find out how many elements are less than the pivot item key -->
+                <setvalue ref="instance('QVARS')/count" 
+                          value="count(../stack/part[1]/item[compare(name, ../../../key) &lt; 0])"/>
+                      
+                <!-- Pull out all elements less than the pivot, if any, into a new first partition -->
+                <action if="instance('QVARS')/count > 0">
+                      	
+                    <!-- Push a new empty partition onto the stack -->
+                    <insert context="instance('QVARS')/stack" origin="../part"/>
+                        
+                    <!-- Copy the lesser elements into the new first partition -->
+                    <setvalue ref="instance('QVARS')/i">1</setvalue>
+                    <setvalue ref="instance('QVARS')/index">1</setvalue>
+                    <setvalue ref="instance('QVARS')/psize" value="count(../stack/part[2]/item)"/>                    
+                    
+                    <action while="instance('QVARS')/i &lt;= instance('QVARS')/psize">
+                    
+                        <action if="compare(instance('QVARS')/stack/part[2]/item[number(instance('QVARS')/index)]/name, instance('QVARS')/key) &lt; 0">
+                            <insert context="instance('QVARS')/stack/part[1]"
+                                    nodeset="item" at="last()" position="after"
+                                    origin="instance('QVARS')/stack/part[2]/item[number(instance('QVARS')/index)]"/>
+                            <delete nodeset="instance('QVARS')/stack/part[2]/item[number(instance('QVARS')/index)]"/>
+                            <setvalue ref="instance('QVARS')/index" value=". - 1"/>
+                        </action>
+                       
+                        <setvalue ref="instance('QVARS')/index" value=". + 1"/>
+                        <setvalue ref="instance('QVARS')/i" value=". + 1"/>
+                    </action>
+                    
+                    <!-- Copy the lesser elements into the new first partition 
+                    <insert context="instance('QVARS')/stack/part[1]"
+                            origin="instance('QVARS')/stack/part[2]/item[compare(name, ../../../key) &lt; 0]"/>
+                    -->    
+                    <!-- Delete the lesser elements from the origin partition 
+                    <delete nodeset="instance('QVARS')/stack/part[2]/item[compare(name, ../../../key) &lt; 0]"/>
+                    -->      
+                </action>
+                      
+                <!-- Otherwise, the pivot item has the least key, so move all items matching the pivot key
+                     to the end of the sorted list. If this empties the partition, then delete it. -->
+                <action if="number(instance('QVARS')/count) = 0">
+                    <!-- Append the item(s) with the pivot key to the sorted list of items -->
+                    <insert context="instance('DATA')/items" 
+                            nodeset="item" at="last()" position="after"
+                            origin="instance('QVARS')/stack/part[1]/item[compare(name, ../../../key) = 0]"/>
+                      	      
+                    <!-- Then delete the item(s) that match the pivot key -->
+                    <delete nodeset="instance('QVARS')/stack/part[1]/item[compare(name, ../../../key) = 0]"/>
+                                                   
+                    <!-- If the partition is now empty, then delete it (recursive termination) -->
+                    <delete if="count(instance('QVARS')/stack/part[1]/item) = 0" 
+                            nodeset="instance('QVARS')/stack/part[1]"/>
+                </action>
+            </action>
+        </action>
+
+    </model>
+</head>
+
+<body>
+
+    <h2>An Imperative Quicksort in XForms</h2>
+    
+    <group xmlns="http://www.w3.org/2002/xforms">
+    	
+        <input ref="instance('VARS')/n">
+            <label>Enter data size: </label>
+            <action ev:event="xforms-value-changed">
+                <dispatch name="change-data-size" targetid="M"/>
+                <setvalue ref="instance('VARS')/window/start">1</setvalue>
+            </action>
+        </input>
+
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+
+        <output value="count(instance('DATA')/items/item)">
+            <label>Data Size: </label>
+        </output>
+    	  
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+        
+        <repeat nodeset="instance('DATA')/items/item[position() >= instance('VARS')/window/start and
+                                                     position() &lt;= instance('VARS')/window/end]">
+            <input ref="num"><label/></input>
+            <input ref="name"><label/></input>
+            <input ref="phone"><label/></input>
+            <output ref="pos"/>
+        </repeat>
+        
+        <trigger>
+            <label>Previous</label>
+            <setvalue ev:event="DOMActivate" 
+                      ref="instance('VARS')/window/start"  value="if(. > 1, . - ../size, .)"/>
+        </trigger>
+        <trigger>
+            <label>Next</label>
+            <setvalue ev:event="DOMActivate" 
+                      ref="instance('VARS')/window/start" value="if(. + ../size &lt; ../../n, . + ../size, .)"/>
+        </trigger>
+        
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+        
+        <trigger>
+            <label>Quick Sort by Number</label>
+            <action ev:event="DOMActivate">
+                <setvalue ref="instance('VARS')/time/start" value="seconds-from-dateTime(now())"/>
+                <dispatch name="quick-sort-num" targetid="M"/>
+                <setvalue ref="instance('VARS')/time/stop" value="seconds-from-dateTime(now())"/>
+            </action>
+        </trigger>
+        
+        <trigger>
+            <label>Quick Sort by Name</label>
+            
+            <action ev:event="DOMActivate">
+                <setvalue ref="instance('VARS')/time/start" value="seconds-from-dateTime(now())"/>
+                <dispatch name="quick-sort-name" targetid="M"/>
+                <setvalue ref="instance('VARS')/time/stop" value="seconds-from-dateTime(now())"/>
+            </action>
+        </trigger>
+        
+        <trigger>
+            <label>Prep Stability Demo</label>           
+            <dispatch ev:event="DOMActivate" name="prep-stability-demo" targetid="M"/>
+        </trigger>
+        
+        <p xmlns="http://www.w3.org/1999/xhtml"/>
+        
+        <output ref="instance('VARS')/time/diff">
+            <label>Seconds to Sort: </label>
+        </output>
+        
+    </group>
+</body>
+</html>
